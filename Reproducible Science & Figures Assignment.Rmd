@@ -1,0 +1,319 @@
+---
+title: "Reproducible Science & Figures"
+output: 
+  html_document: 
+    toc: true  
+    code_folding: hide
+  pdf_document: default
+---
+
+```{r Setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load libraries
+
+library(here)
+here()
+
+library(tinytex)
+library(ggplot2)
+library(palmerpenguins)
+library(janitor)
+library(MASS)
+library(dplyr)
+library(tinytex)
+library(ggsignif)
+library(svglite)
+library(car)
+library(carData)
+
+```
+
+## Data Visualisation for Science Communication
+
+### A misleading figure
+
+```{r, warning=FALSE, fig.align='center', fig.cap='An example of a misleading figure.'}
+# Misleading Figure with Nonlinear Y-Axis and Obscured Points
+misleading_plot <- ggplot(penguins, aes(x = species, y = flipper_length_mm)) +
+  geom_jitter(aes(shape = sex, color = species), alpha = 1, size = 6, width = 0.3) +  # Larger points with full opacity
+  coord_polar(theta = "y") +  # Retain polar coordinate distortion
+  labs(
+    title = "Flipper Lengths",
+    x = "Species",
+    y = "Flipper Length",
+    color = "Species",
+    shape = "Sex"
+  ) +
+  scale_y_continuous(
+    trans = "log10",  # Nonlinear y-axis for distortion
+    breaks = c(150, 180, 200, 230),  # Custom breaks for clarity
+    labels = c("150", "180", "200", "230")  # Ensure labels match the breaks
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 16, color = "darkred")
+  )
+
+
+
+# Display plot
+misleading_plot
+
+```
+
+This plot visually misrepresents data from the Palmer Penguins dataset, making it difficult to interpret meaningful relationships and trends.
+
+The use of polar coordinates distorts the spatial relationship between data points. Polar transformations are best suited for circular or cyclical data, yet flipper length is a linear variable. This misapplication creates circular clustering patterns that do not exist in the actual data. By breaking the natural relationship between the axes, viewers are misled into interpreting patterns that are purely artefacts of the design. Visualisations should aim for clarity rather than artistic distortion and this plot contravenes that principle by prioritising form over function (Baker, 2016). 
+
+The nonlinear y-axis scaling (log10 transformation) further exacerbates the issue. While differences in flipper length across species are moderate, the exaggerated scaling amplifies smaller values and compresses larger ones. This creates a visual illusion of disproportionately large differences between groups. McKiernan et al. (2016) argue that maintaining accurate and proportionate scaling is essential for ensuring visual integrity, a principle ignored here. 
+
+Large, opaque points obscure distinctions between sexes, represented by circles and triangles. Increased point size and lack of transparency conceal overlaps, rendering sex-based comparisons almost impossible. Combined with a poorly designed legend, viewers struggle to associate colours and shapes with data groups, violating best practices for interpretability (Baker, 2016; McKiernan et al., 2016). 
+
+The lack of clear labelling exacerbates the confusion. While “Flipper Length” is mentioned, it omits the unit of measurement (mm), leaving viewers without context for interpreting the scale. The x-axis label for species is present, but the visual clutter caused by the polar coordinates undermines its utility. 
+
+Lastly, the title "Flipper Lengths" is vague and uninformative. Titles should summarise key insights or guide viewers, yet this one offers no context or purpose, further diminishing the plot's utility (McKiernan et al., 2016). 
+
+------------------------------------------------------------------------
+
+## Data Pipeline
+
+### Introduction
+
+The goal of this analysis is to examine variations in culmen length among three penguin species from the Palmer Penguins dataset. This dataset serves as a good example for testing hypotheses about morphological differences across species, as it contains data on key traits such as culmen length, flipper length, and body mass.
+
+```{r Cleaning Data}
+
+# Load the function definitions
+source("functions/cleaning.r")
+source("functions/plotting.r")
+
+# Save the raw data
+write.csv(penguins_raw, "data/penguins_raw.csv", row.names = FALSE)
+penguins_raw <- read.csv(here("data","penguins_raw.csv"))
+
+# Apply function from cleaning.R folder
+penguins_clean <- Cleaning(penguins_raw) 
+  
+# Save new data
+write.csv(penguins_clean, "data/penguins_clean.csv", row.names = FALSE)
+
+# Check cleaning worked by comparing the column names 
+names(penguins_raw)
+names(penguins_clean)
+
+```
+
+The raw data is first loaded into the environment. A custom cleaning function is applied to tidy the dataset by removing irrelevant or empty columns, standardising column names, and shortening species names for better readability. This ensures that the data is free of inconsistencies and ready for analysis.
+
+```{r Generate Violin Plot, warning=FALSE, fig.align='center', fig.cap='Figure 1: Violin plot of culmen length across species.'}
+source("functions/plotting.R")
+
+create_violin_plot(
+  data = penguins_clean,
+  output_filename_svg = "figures/violin_culmen_length.svg"
+)
+
+```
+
+An exploratory violin plot is created to visualise the distribution of culmen length across species. Jittered points are overlaid on the plot to show individual data points.
+
+### Hypothesis
+
+:::: hypothesis
+::: panel
+**H**<sub>0</sub>: There is no significant difference in the mean culmen length of Adélie, Gentoo and Chinstrap penguins.\
+**H**<sub>A</sub>: At least one species (Adélie, Gentoo, or Chinstrap penguins) has a significantly different mean culmen length compared to the others.
+:::
+::::
+
+### Statistical Methods
+
+A linear model (ANOVA) is performed to test for significant differences in mean culmen length among species. The model assumptions of normality and homogeneity of variance are checked. Since the assumption of normality of residuals is violated (p value for shaprio wilk is less than 0.05), a Box-Cox transformation is applied .
+
+```{r Checking Assumptions}
+
+# Fit the initial linear model to assess differences in culmen length between species 
+penguins_clean$species <- as.factor(penguins_clean$species)
+lm_initial <- lm(culmen_length_mm ~ species, data = penguins_clean)
+
+# Check for normality of residuals
+shapiro_test <- shapiro.test(residuals(lm_initial)) # Shapiro-Wilk test
+cat("Shapiro-Wilk p-value (normality):", shapiro_test$p.value, "\n")
+
+# Check for homogeneity of variance
+levene_test <- car::leveneTest(culmen_length_mm ~ species, data = penguins_clean)
+cat("Levene's Test p-value (homogeneity of variance):", levene_test$`Pr(>F)`[1], "\n")
+
+
+```
+
+```{r Transformation, fig.keep='none'}
+
+# Box-Cox transformation applied to meet model assumptions
+boxcox(lm_initial)  
+
+# Extract optimal lambda (λ) from the boxcox result
+lambda <- boxcox(lm_initial)$x[which.max(boxcox(lm_initial)$y)]
+
+# Apply Box-Cox transformation to Depth based on the optimal lambda
+penguins_clean$transformed_length <- (penguins_clean$culmen_length_mm^lambda - 1) / lambda 
+
+# Fit new linear model
+lm_transformed <- lm(transformed_length ~ species, data = penguins_clean)
+
+# Perform residual tests
+shapiro_test <- shapiro.test(residuals(lm_transformed)) # Shapiro-Wilk test
+levene_test <- car::leveneTest(transformed_length ~ species, data = penguins_clean)
+
+# Extract the required values correctly
+shapiro_stat <- formatC(shapiro_test$statistic, format = "f", digits = 4)
+shapiro_pval <- format.pval(shapiro_test$p.value, digits = 4, eps = 1e-4)
+
+levene_stat <- formatC(levene_test$`F value`[1], format = "f", digits = 4)  # Extract F value
+levene_pval <- format.pval(levene_test$`Pr(>F)`[1], digits = 4, eps = 1e-4)  # Extract p-value
+
+# Create a data frame for the results
+residual_test_results <- data.frame(
+  Test = c("Shapiro-Wilk Test", "Levene's Test"),
+  Statistic = c(shapiro_stat, levene_stat),
+  `p-value` = c(shapiro_pval, levene_pval)
+)
+
+# Display the results in a neat table using knitr::kable
+knitr::kable(
+  residual_test_results,
+  caption = "Residual Test Results for Transformed Model",
+  col.names = c("Test", "Statistic", "p-value"),
+  format = "markdown"
+)
+
+
+# Remove rows with non-finite transformed_length
+penguins_clean <- penguins_clean[is.finite(penguins_clean$transformed_length), ]
+
+
+
+```
+
+```{r Residual Diagnostics, fig.height=6, fig.width=6, fig.align='center', fig.cap='Figure 2: Visualising residual diagnostics.'}
+
+# Adjust plotting layout and margins for taller plots
+par(mfrow = c(2, 2), # Keep 2x2 layout
+    mar = c(4, 4, 2, 1)) # Margins: c(bottom, left, top, right)
+
+# Plot the residual diagnostics
+plot(lm_transformed)
+
+```
+
+now it fits the assumptions so we can used the transfromed data for our one way ANOVA now the rest of this is going to be looking at the transformed culmen length and the transformed model
+
+```{r One Way ANOVA on Transformed Data, warning=FALSE}
+
+# Perform the ANOVA on transformed data
+anova_res_transformed <- aov(transformed_length ~ species, data = penguins_clean)
+
+# Extract summary of the ANOVA
+anova_summary_transformed <- summary(anova_res_transformed)
+
+# Format the ANOVA table to include readable p-values
+anova_table_transformed <- as.data.frame(anova_summary_transformed[[1]])
+anova_table_transformed <- tibble::rownames_to_column(anova_table_transformed, "Term")
+
+# Format the p-values to show in scientific notation
+anova_table_transformed$`Pr(>F)` <- format.pval(anova_table_transformed$`Pr(>F)`, digits = 4, eps = 1e-4)
+
+# Display the table using knitr::kable
+knitr::kable(
+  anova_table_transformed,
+  caption = "ANOVA Results: Transformed Culmen Length Across Species",
+  col.names = c("Term", "Df", "Sum Sq", "Mean Sq", "F value", "Pr(>F)"),
+  format = "markdown"
+)
+
+
+```
+
+so yes the difference is still significant if we are using the transformed data
+
+Since Pr(\>F) for species is \< 1e-04 (very small), we reject the null hypothesis (H₀) that there is no significant difference in the mean transformed culmen length across species.
+
+This suggests that at least one species has a mean transformed culmen length significantly different from the others.
+
+The high F-value (427.05) indicates that the variance in transformed culmen length explained by species is much larger than the variance left unexplained (residual variance). This strengthens the case that species is a strong predictor of transformed culmen length.
+
+```{r Tukey HSD Transformed Data, message = FALSE}
+
+# Perform Tukey's HSD test on transformed data
+tukey_res_transformed <- TukeyHSD(anova_res_transformed)
+
+# Format and display the Tukey results as a table
+tukey_table_transformed <- as.data.frame(tukey_res_transformed$species)
+tukey_table_transformed <- tibble::rownames_to_column(tukey_table_transformed, "Comparison")
+
+knitr::kable(
+  tukey_table_transformed,
+  caption = "Tukey's HSD Results for Transformed Culmen Length by Species",
+  col.names = c("Comparison", "Difference", "Lower Bound", "Upper Bound", "p-value"),
+  format = "markdown"
+)
+```
+
+A post-hoc Tukey HSD test is performed to identify pairwise differences between species.
+
+### Results & Discussion
+
+```{r Plotting Transformed Results, warning=FALSE, fig.align='center', fig.cap='Figure 4: Culmen length across species.'}
+
+# Create and save the box plot with significance bars
+create_box_plot(
+  data = penguins_clean,
+  output_filename_svg = "figures/results_transformed_culmen_length_adjusted.svg"
+)
+
+```
+
+A boxplot of transformed culmen lengths is produced to summarise the findings from the ANOVA and Tukey’s HSD tests. Significance bars indicating pairwise differences are added above the plot. This figure directly communicates the statistical findings while minimising the complexity of interpretation.
+
+### Conclusion
+
+This analysis confirms significant differences in culmen length between the three penguin species, even after normalising the data. The transformed boxplot visually supports these findings, with pairwise comparisons showing Chinstrap penguins have the largest culmen lengths, followed by Gentoo and Adelie penguins. This study demonstrates the importance of data cleaning, proper statistical testing, and clear visualisation to draw accurate conclusions from biological datasets. By adhering to a reproducible pipeline, this analysis ensures transparency and replicability for future studies.
+
+------------------------------------------------------------------------
+
+## Open Science
+
+### GitHub
+
+*GitHub link:*
+
+*Partner's GitHub link:*
+
+### My Code
+
+-   Reflection on my experience running partner's code (300-500 words)
+
+-   *What elements of your partner's code helped you to understand their data pipeline?*
+
+-   *Did it run? Did you need to fix anything?*
+
+-   *What suggestions would you make for improving their code to make it more understandable or reproducible, and why?*
+
+-   *If you needed to alter your partner's figure using their code, do you think that would be easy or difficult, and why?*
+
+### Partners Code
+
+-   Reflect on your own code based on your experience with your partner's code and their review of yours. (300-500 words)
+
+-   *What improvements did they suggest, and do you agree?*
+
+-   *What did you learn about writing code for other people?*
+
+## References
+
+-   Baker, M. (2016) ‘1,500 scientists lift the lid on reproducibility’, Nature, 533(7604), pp. 452–454. <doi:10.1038/533452a>.
+-   McKiernan, E.C. et al. (2016) ‘How open science helps researchers succeed’, eLife, 5. <doi:10.7554/elife.16800>.
